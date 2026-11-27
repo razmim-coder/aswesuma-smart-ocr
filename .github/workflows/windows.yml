@@ -22,6 +22,8 @@ jobs:
           python -m pip install pillow pymupdf pytesseract pyinstaller
           choco install tesseract -y --no-progress
           python -m py_compile app.py household.py
+          python -c "from household import parse_rows, matches, duplicate_ids, format_hh; a=list(parse_rows('12 HH22330529500123 | Example A | 214/C Sample | Poor | Eligible')); assert len(a)==1; assert matches(a[0],'HH-2-2-33-05-295-00123','HH Number'); assert matches(a[0],'214C','House Number'); assert duplicate_ids(a+a)=={'22330529500123':2}; assert not duplicate_ids(a); assert format_hh(a[0][1])=='HH-2-2-33-05-295-00123'"
+          if ($LASTEXITCODE -ne 0) { throw 'Search regression tests failed' }
       - name: Bundle OCR engine
         shell: pwsh
         run: |
@@ -35,13 +37,13 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'OCR check failed' }
           python -m PyInstaller --noconfirm --clean --windowed --onedir --name AswesumaSmartOCR --add-data "ocr;ocr" app.py
           if ($LASTEXITCODE -ne 0) { throw 'Packaging failed' }
-          Compress-Archive -Path dist\AswesumaSmartOCR -DestinationPath AswesumaSmartOCR-V1.0.8-Windows.zip
+          Compress-Archive -Path dist\AswesumaSmartOCR -DestinationPath AswesumaSmartOCR-V1.0.9-Windows.zip
       - name: Publish preview release
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $zip = Join-Path $env:GITHUB_WORKSPACE "AswesumaSmartOCR-V1.0.8-Windows.zip"
+          $zip = Join-Path $env:GITHUB_WORKSPACE "AswesumaSmartOCR-V1.0.9-Windows.zip"
           if (!(Test-Path -LiteralPath $zip -PathType Leaf)) { throw "Missing release ZIP: $zip" }
-          gh release create "preview-${{ github.run_id }}-${{ github.run_attempt }}" "$zip" --target "${{ github.sha }}" --title "V1.0.8 Preview" --notes "Extract ZIP and run AswesumaSmartOCR.exe. Local OCR preview; not production-ready. Verify OCR results against originals." --prerelease
+          gh release create "preview-${{ github.run_id }}-${{ github.run_attempt }}" "$zip" --target "${{ github.sha }}" --title "V1.0.9 Preview" --notes "Extract ZIP and run AswesumaSmartOCR.exe. Local OCR preview; not production-ready. Verify OCR results against originals." --prerelease
           if ($LASTEXITCODE -ne 0) { throw 'Release failed' }
