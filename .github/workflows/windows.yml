@@ -1,0 +1,44 @@
+name: Windows portable preview
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - app.py
+      - .github/workflows/windows.yml
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install build dependencies
+        shell: pwsh
+        run: |
+          python -m pip install pillow pymupdf pytesseract pyinstaller
+          choco install tesseract -y --no-progress
+          python -m py_compile app.py
+      - name: Bundle OCR engine
+        shell: pwsh
+        run: |
+          $src = 'C:\Program Files\Tesseract-OCR'
+          if (!(Test-Path "$src\tesseract.exe")) { throw 'OCR engine not found' }
+          Copy-Item $src ocr -Recurse
+          foreach ($lang in @('eng','tam','sin')) {
+            Invoke-WebRequest "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/main/$lang.traineddata" -OutFile "ocr\tessdata\$lang.traineddata"
+          }
+          & ".\ocr\tesseract.exe" --list-langs
+          if ($LASTEXITCODE -ne 0) { throw 'OCR check failed' }
+          python -m PyInstaller --noconfirm --clean --windowed --onedir --name AswesumaSmartOCR --add-data "ocr;ocr" app.py
+          if ($LASTEXITCODE -ne 0) { throw 'Packaging failed' }
+          Compress-Archive -Path dist\AswesumaSmartOCR -DestinationPath AswesumaSmartOCR-Windows.zip
+      - name: Publish preview release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "preview-${{ github.run_id }}-${{ github.run_attempt }}" AswesumaSmartOCR-Windows.zip --target "${{ github.sha }}" --title "V1.0.0 Preview" --notes "Extract ZIP and run AswesumaSmartOCR.exe. Local OCR preview; not production-ready. Verify OCR results against originals." --prerelease
+          if ($LASTEXITCODE -ne 0) { throw 'Release failed' }
