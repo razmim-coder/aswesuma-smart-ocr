@@ -34,7 +34,7 @@ def matches(row, query, mode="All"):
     address_match=q in norm(address)
     return {"HH Number":hh_match,"Name":name_match,"House Number":house_match,"Address":address_match,"All":hh_match or name_match or address_match or house_match}[mode]
 
-def screenshot_rows(image):
+def screenshot_rows(image, accuracy=False):
     """Recognize the full-screen Aswesuma table layout using horizontal rules."""
     from PIL import Image
     import pytesseract
@@ -66,6 +66,7 @@ def screenshot_rows(image):
         return out
     orders=words(120,165,4,"--psm 6 -c tessedit_char_whitelist=0123456789")
     content=words(166,1315,3,"--psm 11")
+    focused=words(166,280,5,"--psm 6 -c tessedit_char_whitelist=HH0123456789-") if accuracy else []
     rows=[]
     for a,b in bands:
         order="".join(t for x,y,t in orders if a<y<b)
@@ -77,6 +78,15 @@ def screenshot_rows(image):
         # Reference is wrapped over two physical lines.
         ref=re.sub(r"\s+","",ref)
         h=HH.fullmatch(ref)
+        if accuracy:
+            alternate="".join(t for x,y,t in sorted((w for w in focused if a<w[1]<b),key=lambda w:(round(w[1]/9),w[0])))
+            alt=HH.fullmatch(alternate)
+            if h is None and alt is not None:
+                h=alt
+            elif h and alt and h.groups()!=alt.groups():
+                crop=im.crop((166,a+1,280,b-1)).resize((570,max(1,(b-a-2)*5)),Image.Resampling.LANCZOS)
+                third=HH.fullmatch(re.sub(r"\s+","",pytesseract.image_to_string(crop,lang="eng",config="--psm 6 -c tessedit_char_whitelist=HH0123456789-")))
+                if third and third.groups()==alt.groups(): h=alt
         name=cell(280,600); address=cell(600,1125)
         if h and name and address and any(c.isalpha() for c in name):
             category=cell(1125,1205) or "Unknown"
@@ -84,3 +94,13 @@ def screenshot_rows(image):
             status={"eligible":"Eligible","noteligible":"Not Eligible"}.get(raw,"Unknown")
             rows.append((order,"".join(h.groups()),name,address,category,status))
     return rows
+
+def duplicate_ids(rows):
+    from collections import Counter
+    counts=Counter(norm(row[1]).removeprefix("hh") for row in rows if row[1])
+    return {hh:n for hh,n in counts.items() if n>1}
+
+def format_hh(hh):
+    if len(hh)==14 and hh.isdecimal():
+        return "HH-"+ "-".join((hh[0:1],hh[1:2],hh[2:4],hh[4:6],hh[6:9],hh[9:14]))
+    return "HH"+hh
