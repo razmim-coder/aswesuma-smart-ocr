@@ -14,7 +14,8 @@ def parse_rows(text):
         order=line[:hit.start()].strip(" \t|.")
         if not order.isdecimal(): continue
         tail=line[hit.end():].strip(" \t|")
-        parts=re.split(r"\t+|\s*\|\s*| {2,}",tail)
+        parts=tail.split("|") if "|" in tail else re.split(r"\t+| {2,}",tail)
+        parts=[p.strip() for p in parts]
         if len(parts) not in (2,4): continue
         name,address=(p.strip() for p in parts[:2])
         category,status=(parts[2:] if len(parts)==4 else ('Unknown','Unknown'))
@@ -41,11 +42,17 @@ def screenshot_rows(image):
         return []
     im=image.convert("L").resize((1440,810),Image.Resampling.LANCZOS)
     # Table borders span the blank space between address and category.
-    profile=list(im.crop((950,68,1100,778)).resize((1,710)).getdata())
-    cuts=[]
-    for y in range(1,len(profile)-1):
-        if 225<=profile[y]<=245 and profile[y-1]>=247 and profile[y+1]>=247:
-            cuts.append(y+68)
+    profile=list(im.crop((950,68,1100,780)).resize((1,712)).getdata())
+    groups=[]
+    for y,value in enumerate(profile):
+        if 210<=value<248:
+            if groups and y==groups[-1][-1]+1:
+                groups[-1].append(y)
+            else:
+                groups.append([y])
+    # Keep both single-pixel and multi-pixel rules, plus the header's lower edge.
+    cuts=[68+(g[-1] if len(g)>5 else round(sum(g)/len(g)))
+          for g in groups if len(g)<=5 or (g[0]<15 and 20<=len(g)<=70)]
     bands=[(a,b) for a,b in zip(cuts,cuts[1:]) if 32<=b-a<=100]
     if len(bands)<5: return []
     top,bottom=bands[0][0],bands[-1][1]
