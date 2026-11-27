@@ -15,17 +15,18 @@ def parse_rows(text):
         if not order.isdecimal(): continue
         tail=line[hit.end():].strip(" \t|")
         parts=re.split(r"\t+|\s*\|\s*| {2,}",tail)
-        if len(parts)!=2: continue
-        name,address=(p.strip() for p in parts)
+        if len(parts) not in (2,4): continue
+        name,address=(p.strip() for p in parts[:2])
+        category,status=(parts[2:] if len(parts)==4 else ('Unknown','Unknown'))
         if not name or not address or not any(c.isalpha() for c in name): continue
-        yield order,"".join(hit.groups()),name,address
+        yield order,"".join(hit.groups()),name,address,category,status
 
 def matches(row, query, mode="All"):
-    order,hh,name,address=row
+    order,hh,name,address,category,status=row
     q=norm(query)
     if not q: return not query.strip()
     h=q.removeprefix("hh")
-    hh_match=h.isdecimal() and (hh==h or (len(h)<=5 and hh.endswith(h)))
+    hh_match=(q=="hh") or (h.isdecimal() and h in hh)
     house=re.match(r"\s*([\d][\w/-]*)",address)
     house_match=bool(house and norm(house.group(1)).startswith(q))
     name_match=q in norm(name)
@@ -57,7 +58,7 @@ def screenshot_rows(image):
                 out.append((left+d["left"][i]/scale,top+(d["top"][i]+d["height"][i]/2)/scale,t))
         return out
     orders=words(120,165,4,"--psm 6 -c tessedit_char_whitelist=0123456789")
-    content=words(166,1125,2,"--psm 11")
+    content=words(166,1315,3,"--psm 11")
     rows=[]
     for a,b in bands:
         order="".join(t for x,y,t in orders if a<y<b)
@@ -71,5 +72,8 @@ def screenshot_rows(image):
         h=HH.fullmatch(ref)
         name=cell(280,600); address=cell(600,1125)
         if h and name and address and any(c.isalpha() for c in name):
-            rows.append((order,"".join(h.groups()),name,address))
+            category=cell(1125,1205) or "Unknown"
+            raw=norm(cell(1205,1315))
+            status={"eligible":"Eligible","noteligible":"Not Eligible"}.get(raw,"Unknown")
+            rows.append((order,"".join(h.groups()),name,address,category,status))
     return rows
