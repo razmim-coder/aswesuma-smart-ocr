@@ -26,7 +26,7 @@ def connect():
 def normalize(s):
     return re.sub(r"[^\w]", "", s.casefold())
 root = tk.Tk()
-root.title("ASWESUMA SMART OCR - V1.0.6 Preview")
+root.title("ASWESUMA SMART OCR - V1.0.7 Preview")
 root.geometry("1220x720")
 root.configure(bg="#f4f5f7")
 ttk.Style().theme_use("clam")
@@ -36,6 +36,7 @@ status=tk.StringVar(value="Ready • Local storage only")
 query=tk.StringVar()
 mode=tk.StringVar(value='All')
 summary=tk.StringVar()
+eligibility=tk.StringVar(value='All')
 lang=tk.StringVar(value="eng+tam+sin")
 busy=False
 capturing=False
@@ -113,7 +114,7 @@ def save_page(c,im,source,page,language,existing,pdf_page=None):
         try:
             recognized=screenshot_rows(im)
             if recognized:
-                body="\n".join(f"{order} HH{hh} | {name} | {address}" for order,hh,name,address in recognized)
+                body="\n".join(f"{order} HH{hh} | {name} | {address} | {category} | {status}" for order,hh,name,address,category,status in recognized)
         except Exception:
             pass
     if not list(parse_rows(body)):
@@ -209,6 +210,7 @@ def delete_all():
         c.execute("DELETE FROM pages")
         c.execute("DELETE FROM documents")
         c.commit()
+    eligibility.set("All")
     query.set("")
     search()
     if failures: messagebox.showwarning("Partial deletion","Some local files could not be removed:\n"+"\n".join(failures))
@@ -224,9 +226,9 @@ def search(*args):
         for id,body in pages:
             for n,row in enumerate(parse_rows(body)):
                 row_count+=1
-                if matches(row,q,mode.get()):
-                    order,hh,name,address=row
-                    tree.insert("","end",iid=f"{id}:{n}",values=(order,name,address))
+                if matches(row,q,mode.get()) and (eligibility.get()=="All" or row[5]==eligibility.get()):
+                    order,hh,name,address,category,eligible=row
+                    tree.insert("","end",iid=f"{id}:{n}",values=(order,"HH"+hh,name,address,category,eligible),tags=(eligible,))
                     total+=1
     summary.set(f"Saved documents: {docs}  |  Indexed pages: {len(pages)}  |  Household records: {row_count}  |  Matches: {total}")
     status.set("No household rows recognized. Reprocess PDF or check source layout." if pages and not row_count else f"{total} matching household rows • Verify against original")
@@ -255,10 +257,15 @@ entry=ttk.Entry(root,textvariable=query,font=("Segoe UI",15));entry.pack(fill="x
 selector=ttk.Combobox(root,textvariable=mode,values=["All","HH Number","Name","House Number","Address"],state="readonly")
 selector.pack(pady=5)
 selector.bind("<<ComboboxSelected>>",search)
+elig=ttk.Combobox(root,textvariable=eligibility,values=["All","Eligible","Not Eligible","Unknown"],state="readonly")
+elig.pack(pady=3)
+elig.bind("<<ComboboxSelected>>",search)
 query.trace_add("write",search)
-tree=ttk.Treeview(root,columns=("order","name","address"),show="headings")
-for col,w in [("order",100),("name",360),("address",540)]:
-    tree.heading(col,text="Order No." if col=="order" else col.title());tree.column(col,width=w)
+tree=ttk.Treeview(root,columns=("order","hh","name","address","category","status"),show="headings")
+for col,w in [("order",70),("hh",170),("name",260),("address",380),("category",100),("status",110)]:
+    tree.heading(col,text={"order":"Order No.","hh":"HH Number","status":"Aswesuma Status"}.get(col,col.title()));tree.column(col,width=w)
+tree.tag_configure("Eligible",foreground="#176b39")
+tree.tag_configure("Not Eligible",foreground="#b42318")
 tree.pack(fill="both",expand=True,padx=22,pady=10)
 tree.bind("<Double-1>",lambda e:original())
 ttk.Label(root,textvariable=summary,font=("Segoe UI",11,"bold")).pack()
