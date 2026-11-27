@@ -26,7 +26,7 @@ def connect():
 def normalize(s):
     return re.sub(r"[^\w]", "", s.casefold())
 root = tk.Tk()
-root.title("ASWESUMA SMART OCR - V1.0.9 Preview")
+root.title("ASWESUMA SMART OCR - V1.0.10 Preview")
 root.geometry("1220x720")
 root.configure(bg="#f4f5f7")
 ttk.Style().theme_use("clam")
@@ -58,11 +58,14 @@ def index_files(paths, reuse=False):
         global busy
         count=0
         errors=[]
+        empty_pages=[]
         try:
             with connect() as c:
                 for path in paths:
                     saved=Path(path) if reuse else DOCS/(uuid.uuid4().hex+"_"+Path(path).name)
                     try:
+                        doc_rows=0
+                        doc_empty=0
                         if not reuse:
                             shutil.copy2(path,saved)
                             c.execute("INSERT INTO documents VALUES(?,?,?)",(str(saved),Path(path).name,"Saved; OCR pending"))
@@ -74,14 +77,22 @@ def index_files(paths, reuse=False):
                                 for i,p in enumerate(doc):
                                     pix=p.get_pixmap(dpi=300,alpha=False)
                                     im=Image.frombytes("RGB",(pix.width,pix.height),pix.samples)
-                                    save_page(c,im,path,i+1,selected,p.get_text(sort=True),p,high)
+                                    found=save_page(c,im,path,i+1,selected,p.get_text(sort=True),p,high)
+                                    doc_rows+=found
+                                    if not found:
+                                        doc_empty+=1
+                                        empty_pages.append(f"{Path(path).name}: page {i+1}")
                                     count+=1
                                     notify(f"Processing page {i+1}/{len(doc)}")
                         else:
                             with Image.open(saved) as im:
-                                save_page(c,im.convert("RGB"),path,1,selected,"",accuracy=high)
+                                found=save_page(c,im.convert("RGB"),path,1,selected,"",accuracy=high)
+                                doc_rows+=found
+                                if not found:
+                                    doc_empty+=1
+                                    empty_pages.append(Path(path).name)
                                 count+=1
-                        c.execute("UPDATE documents SET state=? WHERE path=?",("Indexed",str(saved)))
+                        c.execute("UPDATE documents SET state=? WHERE path=?",(f"{doc_rows} records; {doc_empty} pages without records",str(saved)))
                         c.commit()
                     except Exception as e:
                         errors.append(Path(path).name+": "+str(e))
@@ -91,6 +102,8 @@ def index_files(paths, reuse=False):
                 search()
                 status.set(f"Processed {count} pages; {len(errors)} document errors. See Saved Documents.")
                 if errors: messagebox.showwarning("Import errors","\n".join(errors))
+                elif empty_pages:
+                    messagebox.showwarning("OCR review required",f"{len(empty_pages)} pages contained no recognizable household rows. Originals are saved. Check the source layout or OCR mode.\n"+"\n".join(empty_pages[:12]))
                 else:
                     with connect() as check:
                         records=sum(len(list(parse_rows(body))) for (body,) in check.execute("SELECT body FROM pages"))
@@ -132,8 +145,12 @@ def save_page(c,im,source,page,language,existing,pdf_page=None,accuracy=False):
             if list(parse_rows(candidate)) or not body.strip(): body=candidate
         except Exception:
             if not body.strip(): raise
+    previous=c.execute("SELECT body FROM pages WHERE image=?",(str(dest),)).fetchone()
+    if previous and not list(parse_rows(body)) and list(parse_rows(previous[0])):
+        body=previous[0]
     c.execute("INSERT INTO pages(source,page,image,body) VALUES(?,?,?,?) ON CONFLICT(image) DO UPDATE SET body=CASE WHEN length(excluded.body)>0 THEN excluded.body ELSE pages.body END",(Path(source).name,page,str(dest),body))
     c.commit()
+    return len(list(parse_rows(body)))
 def choose_pdf():
     index_files(filedialog.askopenfilenames(filetypes=[("PDF documents","*.pdf"),("All files","*.*")]))
 def choose():
