@@ -26,7 +26,7 @@ def connect():
 def normalize(s):
     return re.sub(r"[^\w]", "", s.casefold())
 root = tk.Tk()
-root.title("ASWESUMA SMART OCR - V1.0.5 Preview")
+root.title("ASWESUMA SMART OCR - V1.0.6 Preview")
 root.geometry("1220x720")
 root.configure(bg="#f4f5f7")
 ttk.Style().theme_use("clam")
@@ -154,8 +154,7 @@ def capture():
     if busy or capturing:
         messagebox.showinfo("Capture","Please finish the current import or capture.")
         return
-    if not messagebox.askokcancel("Screen capture","Open the Aswesuma page behind this window. After OK you have 5 seconds to switch to the browser."):
-        return
+    status.set("Capturing in 5 seconds; switch to the Aswesuma browser window.")
     capturing=True
     root.iconify()
     def take():
@@ -169,10 +168,7 @@ def capture():
             image.save(path)
             root.deiconify()
             root.lift()
-            if messagebox.askyesno("Capture saved","Screen captured. Import this screenshot into the app?"):
-                index_files([str(path)])
-            else:
-                path.unlink(missing_ok=True)
+            index_files([str(path)])
         except Exception as e:
             root.deiconify()
             messagebox.showerror("Screen capture failed",str(e)+"\nUse Windows+Shift+S, then Paste Screenshot.")
