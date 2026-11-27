@@ -5,7 +5,7 @@ from tkinter import ttk, filedialog, messagebox, simpledialog
 from PIL import Image, ImageGrab, ImageOps
 import fitz
 import pytesseract
-from household import parse_rows, matches, screenshot_rows
+from household import parse_rows, matches, screenshot_rows, duplicate_ids, format_hh
 
 BASE = Path(os.getenv("LOCALAPPDATA", str(Path.home()))) / "AswesumaSmartOCR"
 BASE.mkdir(parents=True, exist_ok=True)
@@ -26,7 +26,7 @@ def connect():
 def normalize(s):
     return re.sub(r"[^\w]", "", s.casefold())
 root = tk.Tk()
-root.title("ASWESUMA SMART OCR - V1.0.8 Preview")
+root.title("ASWESUMA SMART OCR - V1.0.9 Preview")
 root.geometry("1220x720")
 root.configure(bg="#f4f5f7")
 ttk.Style().theme_use("clam")
@@ -37,6 +37,8 @@ query=tk.StringVar()
 mode=tk.StringVar(value='All')
 summary=tk.StringVar()
 eligibility=tk.StringVar(value='All')
+accuracy=tk.StringVar(value='High Accuracy')
+duplicates_only=tk.BooleanVar(value=False)
 lang=tk.StringVar(value="eng+tam+sin")
 busy=False
 capturing=False
@@ -50,6 +52,7 @@ def index_files(paths, reuse=False):
     if not paths: return
     busy=True
     selected=lang.get()
+    high=accuracy.get()=='High Accuracy'
     status.set("Importing documents...")
     def worker():
         global busy
@@ -71,12 +74,12 @@ def index_files(paths, reuse=False):
                                 for i,p in enumerate(doc):
                                     pix=p.get_pixmap(dpi=300,alpha=False)
                                     im=Image.frombytes("RGB",(pix.width,pix.height),pix.samples)
-                                    save_page(c,im,path,i+1,selected,p.get_text(sort=True),p)
+                                    save_page(c,im,path,i+1,selected,p.get_text(sort=True),p,high)
                                     count+=1
                                     notify(f"Processing page {i+1}/{len(doc)}")
                         else:
                             with Image.open(saved) as im:
-                                save_page(c,im.convert("RGB"),path,1,selected,"")
+                                save_page(c,im.convert("RGB"),path,1,selected,"",accuracy=high)
                                 count+=1
                         c.execute("UPDATE documents SET state=? WHERE path=?",("Indexed",str(saved)))
                         c.commit()
@@ -100,7 +103,7 @@ def index_files(paths, reuse=False):
             notify("Error: "+str(e))
         finally: busy=False
     threading.Thread(target=worker,daemon=True).start()
-def save_page(c,im,source,page,language,existing,pdf_page=None):
+def save_page(c,im,source,page,language,existing,pdf_page=None,accuracy=False):
     import hashlib
     key=hashlib.sha256(im.tobytes()+str(im.size).encode()).hexdigest()
     dest=PAGES/(key+".png")
@@ -116,9 +119,9 @@ def save_page(c,im,source,page,language,existing,pdf_page=None):
             if list(parse_rows(candidate)): body=candidate
         except Exception:
             pass
-    if not list(parse_rows(body)):
+    if accuracy or not list(parse_rows(body)):
         try:
-            recognized=screenshot_rows(im)
+            recognized=screenshot_rows(im,accuracy=accuracy)
             if recognized:
                 body="\n".join(f"{order} HH{hh} | {name} | {address} | {category} | {status}" for order,hh,name,address,category,status in recognized)
         except Exception:
@@ -217,6 +220,7 @@ def delete_all():
         c.execute("DELETE FROM documents")
         c.commit()
     eligibility.set("All")
+    duplicates_only.set(False)
     query.set("")
     search()
     if failures: messagebox.showwarning("Partial deletion","Some local files could not be removed:\n"+"\n".join(failures))
@@ -225,18 +229,20 @@ def search(*args):
     q=query.get().strip()
     tree.delete(*tree.get_children())
     total=0
-    row_count=0
     with connect() as c:
         docs=c.execute("SELECT count(*) FROM documents").fetchone()[0]
         pages=c.execute("SELECT id,body FROM pages").fetchall()
-        for id,body in pages:
-            for n,row in enumerate(parse_rows(body)):
-                row_count+=1
-                if matches(row,q,mode.get()) and (eligibility.get()=="All" or row[5]==eligibility.get()):
-                    order,hh,name,address,category,eligible=row
-                    tree.insert("","end",iid=f"{id}:{n}",values=(order,"HH"+hh,name,address,category,eligible),tags=(eligible,))
-                    total+=1
-    summary.set(f"Saved documents: {docs}  |  Indexed pages: {len(pages)}  |  Household records: {row_count}  |  Matches: {total}")
+    rows=[(id,n,row) for id,body in pages for n,row in enumerate(parse_rows(body))]
+    row_count=len(rows)
+    dup=duplicate_ids([row for _,_,row in rows])
+    for id,n,row in rows:
+        order,hh,name,address,category,eligible=row
+        repeated=hh in dup
+        if duplicates_only.get() and not repeated: continue
+        if matches(row,q,mode.get()) and (eligibility.get()=="All" or eligible==eligibility.get()):
+            tree.insert("","end",iid=f"{id}:{n}",values=(order,format_hh(hh),name,address,category,eligible),tags=(("Duplicate",eligible) if repeated else (eligible,)))
+            total+=1
+    summary.set(f"Saved documents: {docs}  |  Indexed pages: {len(pages)}  |  Household records: {row_count}  |  Duplicate HH IDs: {len(dup)}  |  Matches: {total}")
     status.set("No household rows recognized. Reprocess PDF or check source layout." if pages and not row_count else f"{total} matching household rows • Verify against original")
 def original():
     if not tree.selection(): return
@@ -266,10 +272,16 @@ selector.bind("<<ComboboxSelected>>",search)
 elig=ttk.Combobox(root,textvariable=eligibility,values=["All","Eligible","Not Eligible","Unknown"],state="readonly")
 elig.pack(pady=3)
 elig.bind("<<ComboboxSelected>>",search)
+controls=ttk.Frame(root)
+controls.pack(pady=3)
+ttk.Label(controls,text="OCR Mode:").pack(side="left",padx=4)
+ttk.Combobox(controls,textvariable=accuracy,values=["Standard","High Accuracy"],state="readonly",width=15).pack(side="left",padx=4)
+ttk.Checkbutton(controls,text="Show duplicate HH IDs only",variable=duplicates_only,command=search).pack(side="left",padx=12)
 query.trace_add("write",search)
 tree=ttk.Treeview(root,columns=("order","hh","name","address","category","status"),show="headings")
 for col,w in [("order",70),("hh",170),("name",260),("address",380),("category",100),("status",110)]:
     tree.heading(col,text={"order":"Order No.","hh":"HH Number","status":"Aswesuma Status"}.get(col,col.title()));tree.column(col,width=w)
+tree.tag_configure("Duplicate",background="#fff1c2")
 tree.tag_configure("Eligible",foreground="#176b39")
 tree.tag_configure("Not Eligible",foreground="#b42318")
 tree.pack(fill="both",expand=True,padx=22,pady=10)
