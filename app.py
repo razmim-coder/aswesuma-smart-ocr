@@ -5,7 +5,7 @@ from tkinter import ttk, filedialog, messagebox
 from PIL import Image, ImageGrab, ImageOps
 import fitz
 import pytesseract
-from household import parse_rows, matches
+from household import parse_rows, matches, screenshot_rows
 
 BASE = Path(os.getenv("LOCALAPPDATA", str(Path.home()))) / "AswesumaSmartOCR"
 BASE.mkdir(parents=True, exist_ok=True)
@@ -26,7 +26,7 @@ def connect():
 def normalize(s):
     return re.sub(r"[^\w]", "", s.casefold())
 root = tk.Tk()
-root.title("ASWESUMA SMART OCR - V1.0.3 Preview")
+root.title("ASWESUMA SMART OCR - V1.0.4 Preview")
 root.geometry("1050x650")
 root.configure(bg="#f4f5f7")
 ttk.Style().theme_use("clam")
@@ -106,6 +106,13 @@ def save_page(c,im,source,page,language,existing,pdf_page=None):
                     table_rows.append(" | ".join(" ".join((v or "").split()) for v in cells))
             candidate="\n".join(table_rows)
             if list(parse_rows(candidate)): body=candidate
+        except Exception:
+            pass
+    if not list(parse_rows(body)):
+        try:
+            recognized=screenshot_rows(im)
+            if recognized:
+                body="\n".join(f"{order} HH{hh} | {name} | {address}" for order,hh,name,address in recognized)
         except Exception:
             pass
     if not list(parse_rows(body)):
