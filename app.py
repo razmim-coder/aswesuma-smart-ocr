@@ -6,6 +6,7 @@ from PIL import Image, ImageGrab, ImageOps
 import fitz
 import pytesseract
 from household import parse_rows, matches, screenshot_rows, duplicate_ids, format_hh
+from cropped_ocr import cropped_table_rows
 
 BASE = Path(os.getenv("LOCALAPPDATA", str(Path.home()))) / "AswesumaSmartOCR"
 BASE.mkdir(parents=True, exist_ok=True)
@@ -26,7 +27,7 @@ def connect():
 def normalize(s):
     return re.sub(r"[^\w]", "", s.casefold())
 root = tk.Tk()
-root.title("ASWESUMA SMART OCR - V1.0.10 Preview")
+root.title("ASWESUMA SMART OCR - V1.0.11 Preview")
 root.geometry("1220x720")
 root.configure(bg="#f4f5f7")
 ttk.Style().theme_use("clam")
@@ -134,7 +135,13 @@ def save_page(c,im,source,page,language,existing,pdf_page=None,accuracy=False):
             pass
     if accuracy or not list(parse_rows(body)):
         try:
-            recognized=screenshot_rows(im,accuracy=accuracy)
+            ocr_image=im
+            if pdf_page is not None and 1.15 < im.width/im.height < 1.60:
+                native=pdf_page.get_pixmap(alpha=False)
+                ocr_image=Image.frombytes("RGB",(native.width,native.height),native.samples)
+            recognized=cropped_table_rows(ocr_image,accuracy=accuracy)
+            if not recognized:
+                recognized=screenshot_rows(im,accuracy=accuracy)
             if recognized:
                 body="\n".join(f"{order} HH{hh} | {name} | {address} | {category} | {status}" for order,hh,name,address,category,status in recognized)
         except Exception:
