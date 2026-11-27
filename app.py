@@ -26,7 +26,7 @@ def connect():
 def normalize(s):
     return re.sub(r"[^\w]", "", s.casefold())
 root = tk.Tk()
-root.title("ASWESUMA SMART OCR - V1.0.7 Preview")
+root.title("ASWESUMA SMART OCR - V1.0.8 Preview")
 root.geometry("1220x720")
 root.configure(bg="#f4f5f7")
 ttk.Style().theme_use("clam")
@@ -88,7 +88,13 @@ def index_files(paths, reuse=False):
                 search()
                 status.set(f"Processed {count} pages; {len(errors)} document errors. See Saved Documents.")
                 if errors: messagebox.showwarning("Import errors","\n".join(errors))
-                else: messagebox.showinfo("Import complete",f"Processed {count} pages. Originals saved in Saved Documents.")
+                else:
+                    with connect() as check:
+                        records=sum(len(list(parse_rows(body))) for (body,) in check.execute("SELECT body FROM pages"))
+                    if records==0:
+                        messagebox.showwarning("Saved, but no household records","Original documents saved. No recognizable household rows yet. Open Saved Documents to verify the captured source.")
+                    else:
+                        messagebox.showinfo("Import complete",f"Processed {count} pages. {records} household rows currently indexed. Verify against original.")
             root.after(0,finish)
         except Exception as e:
             notify("Error: "+str(e))
