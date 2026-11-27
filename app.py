@@ -5,6 +5,7 @@ from tkinter import ttk, filedialog, messagebox
 from PIL import Image, ImageGrab, ImageOps
 import fitz
 import pytesseract
+from household import parse_rows, matches
 
 BASE = Path(os.getenv("LOCALAPPDATA", str(Path.home()))) / "AswesumaSmartOCR"
 BASE.mkdir(parents=True, exist_ok=True)
@@ -22,7 +23,7 @@ def connect():
 def normalize(s):
     return re.sub(r"[^\w]", "", s.casefold())
 root = tk.Tk()
-root.title("ASWESUMA SMART OCR - V1.0.0 Preview")
+root.title("ASWESUMA SMART OCR - V1.0.1 Preview")
 root.geometry("1050x650")
 root.configure(bg="#f4f5f7")
 ttk.Style().theme_use("clam")
@@ -30,6 +31,7 @@ ttk.Label(root,text="ASWESUMA SMART OCR",font=("Segoe UI",24,"bold")).pack(pady=
 bar=ttk.Frame(root); bar.pack(fill="x",padx=18)
 status=tk.StringVar(value="Ready • Local storage only")
 query=tk.StringVar()
+mode=tk.StringVar(value='All')
 lang=tk.StringVar(value="eng+tam+sin")
 busy=False
 def notify(s):
@@ -84,18 +86,21 @@ def capture():
         finally: root.deiconify()
     root.after(700,take)
 def search(*args):
-    q=query.get().strip().casefold()
+    q=query.get().strip()
     tree.delete(*tree.get_children())
+    total=0
     with connect() as c:
-        for id,src,page,img,body in c.execute("SELECT id,source,page,image,body FROM pages"):
-            if not q or q in body.casefold() or (normalize(q) and normalize(q) in normalize(body)):
-                lines=body.splitlines()
-                hit=next((x for x in lines if q in x.casefold() or (normalize(q) and normalize(q) in normalize(x))),body[:150])
-                tree.insert("","end",iid=str(id),values=(src,page,hit[:180]))
+        for id,body in c.execute("SELECT id,body FROM pages"):
+            for n,row in enumerate(parse_rows(body)):
+                if matches(row,q,mode.get()):
+                    order,hh,name,address=row
+                    tree.insert("","end",iid=f"{id}:{n}",values=(order,name,address))
+                    total+=1
+    status.set(f"{total} matching household rows • Verify against original")
 def original():
     if not tree.selection(): return
     with connect() as c:
-        row=c.execute("SELECT image FROM pages WHERE id=?",(tree.selection()[0],)).fetchone()
+        row=c.execute("SELECT image FROM pages WHERE id=?",(tree.selection()[0].split(':')[0],)).fetchone()
     if row: os.startfile(row[0])
 def export_pdf():
     path=filedialog.asksaveasfilename(defaultextension=".pdf",filetypes=[("PDF","*.pdf")])
@@ -110,12 +115,15 @@ def export_pdf():
 for label,cmd in [("Capture screen",capture),("Import images / PDF",choose),("Save all as PDF",export_pdf),("View original",original)]:
     ttk.Button(bar,text=label,command=cmd).pack(side="left",padx=5)
 ttk.Combobox(bar,textvariable=lang,values=["eng+tam+sin","eng","tam","sin"],state="readonly",width=15).pack(side="right")
-ttk.Label(root,text="Search by name or HH number (including last five digits)").pack(pady=(20,3))
+ttk.Label(root,text="Search by HH Number / Name / House Number / Address").pack(pady=(20,3))
 entry=ttk.Entry(root,textvariable=query,font=("Segoe UI",15));entry.pack(fill="x",padx=22)
+selector=ttk.Combobox(root,textvariable=mode,values=["All","HH Number","Name","House Number","Address"],state="readonly")
+selector.pack(pady=5)
+selector.bind("<<ComboboxSelected>>",search)
 query.trace_add("write",search)
-tree=ttk.Treeview(root,columns=("source","page","match"),show="headings")
-for col,w in [("source",230),("page",65),("match",700)]:
-    tree.heading(col,text=col.title());tree.column(col,width=w)
+tree=ttk.Treeview(root,columns=("order","name","address"),show="headings")
+for col,w in [("order",100),("name",360),("address",540)]:
+    tree.heading(col,text="Order No." if col=="order" else col.title());tree.column(col,width=w)
 tree.pack(fill="both",expand=True,padx=22,pady=10)
 tree.bind("<Double-1>",lambda e:original())
 ttk.Label(root,textvariable=status).pack()
