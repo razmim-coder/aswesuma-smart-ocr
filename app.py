@@ -11,6 +11,8 @@ BASE = Path(os.getenv("LOCALAPPDATA", str(Path.home()))) / "AswesumaSmartOCR"
 BASE.mkdir(parents=True, exist_ok=True)
 PAGES = BASE / "pages"
 PAGES.mkdir(exist_ok=True)
+DOCS = BASE / 'documents'
+DOCS.mkdir(exist_ok=True)
 DB = BASE / "index.sqlite"
 bundle = Path(getattr(sys, "_MEIPASS", Path(__file__).parent)) / "ocr"
 if (bundle / "tesseract.exe").exists():
@@ -19,11 +21,12 @@ if (bundle / "tesseract.exe").exists():
 def connect():
     c = sqlite3.connect(DB)
     c.execute("CREATE TABLE IF NOT EXISTS pages(id INTEGER PRIMARY KEY, source TEXT, page INTEGER, image TEXT, body TEXT, UNIQUE(image))")
+    c.execute("CREATE TABLE IF NOT EXISTS documents(path TEXT PRIMARY KEY, name TEXT, state TEXT)")
     return c
 def normalize(s):
     return re.sub(r"[^\w]", "", s.casefold())
 root = tk.Tk()
-root.title("ASWESUMA SMART OCR - V1.0.1 Preview")
+root.title("ASWESUMA SMART OCR - V1.0.2 Preview")
 root.geometry("1050x650")
 root.configure(bg="#f4f5f7")
 ttk.Style().theme_use("clam")
@@ -38,28 +41,51 @@ def notify(s):
     root.after(0,lambda:status.set(s))
 def index_files(paths):
     global busy
-    if busy or not paths: return
+    if busy:
+        messagebox.showinfo("Import","Another import is running.")
+        return
+    if not paths: return
     busy=True
     selected=lang.get()
+    status.set("Importing documents...")
     def worker():
         global busy
         count=0
+        errors=[]
         try:
             with connect() as c:
                 for path in paths:
-                    if Path(path).suffix.lower()==".pdf":
-                        with fitz.open(path) as doc:
-                            for i,p in enumerate(doc):
-                                pix=p.get_pixmap(dpi=300,alpha=False)
-                                im=Image.frombytes("RGB",(pix.width,pix.height),pix.samples)
-                                save_page(c,im,path,i+1,selected,p.get_text())
+                    saved=DOCS/(uuid.uuid4().hex+"_"+Path(path).name)
+                    try:
+                        shutil.copy2(path,saved)
+                        c.execute("INSERT INTO documents VALUES(?,?,?)",(str(saved),Path(path).name,"Saved; OCR pending"))
+                        c.commit()
+                        notify(f"Saved {Path(path).name}; processing OCR")
+                        if saved.suffix.lower()==".pdf":
+                            with fitz.open(saved) as doc:
+                                if doc.needs_pass: raise ValueError("Password-protected PDF")
+                                for i,p in enumerate(doc):
+                                    pix=p.get_pixmap(dpi=300,alpha=False)
+                                    im=Image.frombytes("RGB",(pix.width,pix.height),pix.samples)
+                                    save_page(c,im,path,i+1,selected,p.get_text())
+                                    count+=1
+                                    notify(f"Processing page {i+1}/{len(doc)}")
+                        else:
+                            with Image.open(saved) as im:
+                                save_page(c,im.convert("RGB"),path,1,selected,"")
                                 count+=1
-                    else:
-                        with Image.open(path) as im:
-                            save_page(c,im.convert("RGB"),path,1,selected,"")
-                            count+=1
-                    notify(f"Indexed {count} pages")
-            root.after(0,search)
+                        c.execute("UPDATE documents SET state=? WHERE path=?",("Indexed",str(saved)))
+                        c.commit()
+                    except Exception as e:
+                        errors.append(Path(path).name+": "+str(e))
+                        c.execute("UPDATE documents SET state=? WHERE path=?",("OCR/import error: "+str(e),str(saved)))
+                        c.commit()
+            def finish():
+                search()
+                status.set(f"Processed {count} pages; {len(errors)} document errors. See Saved Documents.")
+                if errors: messagebox.showwarning("Import errors","\n".join(errors))
+                else: messagebox.showinfo("Import complete",f"Processed {count} pages. Originals saved in Saved Documents.")
+            root.after(0,finish)
         except Exception as e:
             notify("Error: "+str(e))
         finally: busy=False
@@ -69,12 +95,29 @@ def save_page(c,im,source,page,language,existing):
     key=hashlib.sha256(im.tobytes()+str(im.size).encode()).hexdigest()
     dest=PAGES/(key+".png")
     if c.execute("SELECT 1 FROM pages WHERE image=?",(str(dest),)).fetchone(): return
-    body=existing if existing.strip() else pytesseract.image_to_string(ImageOps.autocontrast(ImageOps.grayscale(im)),lang=language)
     im.save(dest)
+    body=existing if existing.strip() else pytesseract.image_to_string(ImageOps.autocontrast(ImageOps.grayscale(im)),lang=language)
     c.execute("INSERT INTO pages(source,page,image,body) VALUES(?,?,?,?)",(Path(source).name,page,str(dest),body))
     c.commit()
+def choose_pdf():
+    index_files(filedialog.askopenfilenames(filetypes=[("PDF documents","*.pdf"),("All files","*.*")]))
 def choose():
-    index_files(filedialog.askopenfilenames(filetypes=[("Documents","*.pdf *.png *.jpg *.jpeg *.bmp *.webp")]))
+    index_files(filedialog.askopenfilenames(filetypes=[("Images",("*.png","*.jpg","*.jpeg","*.bmp","*.webp")),("All files","*.*")]))
+def documents():
+    win=tk.Toplevel(root)
+    win.title("Saved Documents")
+    win.geometry("850x400")
+    listing=ttk.Treeview(win,columns=("name","state"),show="headings")
+    listing.heading("name",text="Original document")
+    listing.heading("state",text="Status")
+    listing.pack(fill="both",expand=True)
+    with connect() as c:
+        rows=c.execute("SELECT path,name,state FROM documents ORDER BY rowid DESC").fetchall()
+    for i,(_,name,state) in enumerate(rows): listing.insert("","end",iid=str(i),values=(name,state))
+    def open_doc():
+        if listing.selection(): os.startfile(rows[int(listing.selection()[0])][0])
+    ttk.Button(win,text="Open original",command=open_doc).pack()
+    ttk.Button(win,text="Open storage folder",command=lambda:os.startfile(DOCS)).pack()
 def capture():
     root.withdraw()
     def take():
@@ -106,13 +149,15 @@ def export_pdf():
     path=filedialog.asksaveasfilename(defaultextension=".pdf",filetypes=[("PDF","*.pdf")])
     if not path:return
     with connect() as c: rows=c.execute("SELECT image FROM pages ORDER BY id").fetchall()
-    if not rows:return
+    if not rows:
+        messagebox.showwarning("Save PDF","No indexed pages. Check Saved Documents for original PDFs and import errors.")
+        return
     with fitz.open() as doc:
         for (img,) in rows:
             with fitz.open(img) as image: doc.insert_pdf(fitz.open("pdf",image.convert_to_pdf()))
         doc.save(path)
     status.set("Image PDF saved")
-for label,cmd in [("Capture screen",capture),("Import images / PDF",choose),("Save all as PDF",export_pdf),("View original",original)]:
+for label,cmd in [("Capture screen",capture),("Import PDF",choose_pdf),("Import images",choose),("Saved Documents",documents),("Save all as PDF",export_pdf),("View original",original)]:
     ttk.Button(bar,text=label,command=cmd).pack(side="left",padx=5)
 ttk.Combobox(bar,textvariable=lang,values=["eng+tam+sin","eng","tam","sin"],state="readonly",width=15).pack(side="right")
 ttk.Label(root,text="Search by HH Number / Name / House Number / Address").pack(pady=(20,3))
