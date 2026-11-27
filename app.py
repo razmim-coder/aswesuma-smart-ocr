@@ -1,7 +1,7 @@
 import os, sys, sqlite3, threading, shutil, re, uuid
 from pathlib import Path
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from tkinter import ttk, filedialog, messagebox, simpledialog
 from PIL import Image, ImageGrab, ImageOps
 import fitz
 import pytesseract
@@ -26,8 +26,8 @@ def connect():
 def normalize(s):
     return re.sub(r"[^\w]", "", s.casefold())
 root = tk.Tk()
-root.title("ASWESUMA SMART OCR - V1.0.4 Preview")
-root.geometry("1050x650")
+root.title("ASWESUMA SMART OCR - V1.0.5 Preview")
+root.geometry("1220x720")
 root.configure(bg="#f4f5f7")
 ttk.Style().theme_use("clam")
 ttk.Label(root,text="ASWESUMA SMART OCR",font=("Segoe UI",24,"bold")).pack(pady=15)
@@ -38,6 +38,7 @@ mode=tk.StringVar(value='All')
 summary=tk.StringVar()
 lang=tk.StringVar(value="eng+tam+sin")
 busy=False
+capturing=False
 def notify(s):
     root.after(0,lambda:status.set(s))
 def index_files(paths, reuse=False):
@@ -149,15 +150,73 @@ def reprocess():
     if paths: index_files(paths, reuse=True)
     else: messagebox.showinfo("Reprocess","No saved originals. Import the original PDF again.")
 def capture():
-    root.withdraw()
+    global capturing
+    if busy or capturing:
+        messagebox.showinfo("Capture","Please finish the current import or capture.")
+        return
+    if not messagebox.askokcancel("Screen capture","Open the Aswesuma page behind this window. After OK you have 5 seconds to switch to the browser."):
+        return
+    capturing=True
+    root.iconify()
     def take():
+        global capturing
+        path=None
         try:
+            image=ImageGrab.grab(all_screens=False)
+            if image.width<100 or image.height<100:
+                raise ValueError("Screen image is empty")
             path=BASE/("capture-"+uuid.uuid4().hex+".png")
-            ImageGrab.grab().save(path)
-            index_files([str(path)])
-        except Exception as e: status.set(str(e))
-        finally: root.deiconify()
-    root.after(700,take)
+            image.save(path)
+            root.deiconify()
+            root.lift()
+            if messagebox.askyesno("Capture saved","Screen captured. Import this screenshot into the app?"):
+                index_files([str(path)])
+            else:
+                path.unlink(missing_ok=True)
+        except Exception as e:
+            root.deiconify()
+            messagebox.showerror("Screen capture failed",str(e)+"\nUse Windows+Shift+S, then Paste Screenshot.")
+        finally:
+            capturing=False
+            root.deiconify()
+    root.after(5000,take)
+def paste_capture():
+    if busy or capturing: return
+    try:
+        im=ImageGrab.grabclipboard()
+        if not isinstance(im,Image.Image):
+            messagebox.showinfo("Paste Screenshot","Use Windows+Shift+S to copy an image first.")
+            return
+        path=BASE/("capture-"+uuid.uuid4().hex+".png")
+        im.convert("RGB").save(path)
+        index_files([str(path)])
+    except Exception as e:
+        messagebox.showerror("Paste Screenshot",str(e))
+def delete_all():
+    if busy or capturing:
+        messagebox.showwarning("Delete All Data","Finish import or capture first.")
+        return
+    if not messagebox.askyesno("Delete All Data","Permanently remove all imported PDFs, screenshots and OCR records stored inside this app? Original files outside the app will not be deleted."):
+        return
+    if simpledialog.askstring("Confirm deletion","Type DELETE to permanently clear the app:") != "DELETE":
+        return
+    failures=[]
+    for folder in (PAGES,DOCS):
+        for item in folder.iterdir():
+            if item.is_file() or item.is_symlink():
+                try: item.unlink()
+                except OSError as e: failures.append(str(e))
+    for item in BASE.glob("capture-*.png"):
+        try: item.unlink()
+        except OSError as e: failures.append(str(e))
+    with connect() as c:
+        c.execute("DELETE FROM pages")
+        c.execute("DELETE FROM documents")
+        c.commit()
+    query.set("")
+    search()
+    if failures: messagebox.showwarning("Partial deletion","Some local files could not be removed:\n"+"\n".join(failures))
+    else: messagebox.showinfo("Delete All Data","All app records and imported copies removed.")
 def search(*args):
     q=query.get().strip()
     tree.delete(*tree.get_children())
@@ -192,7 +251,7 @@ def export_pdf():
             with fitz.open(img) as image: doc.insert_pdf(fitz.open("pdf",image.convert_to_pdf()))
         doc.save(path)
     status.set("Image PDF saved")
-for label,cmd in [("Capture screen",capture),("Import PDF",choose_pdf),("Import images",choose),("Saved Documents",documents),("Save all as PDF",export_pdf),("View original",original)]:
+for label,cmd in [("Capture screen",capture),("Paste Screenshot",paste_capture),("Import PDF",choose_pdf),("Import images",choose),("Saved Documents",documents),("Save all as PDF",export_pdf),("View original",original)]:
     ttk.Button(bar,text=label,command=cmd).pack(side="left",padx=5)
 ttk.Combobox(bar,textvariable=lang,values=["eng+tam+sin","eng","tam","sin"],state="readonly",width=15).pack(side="right")
 ttk.Label(root,text="Search by HH Number / Name / House Number / Address").pack(pady=(20,3))
@@ -207,7 +266,10 @@ for col,w in [("order",100),("name",360),("address",540)]:
 tree.pack(fill="both",expand=True,padx=22,pady=10)
 tree.bind("<Double-1>",lambda e:original())
 ttk.Label(root,textvariable=summary,font=("Segoe UI",11,"bold")).pack()
-ttk.Button(root,text="Reprocess saved documents",command=reprocess).pack(pady=3)
+toolsbar=ttk.Frame(root)
+toolsbar.pack(pady=3)
+ttk.Button(toolsbar,text="Reprocess saved documents",command=reprocess).pack(side="left",padx=5)
+ttk.Button(toolsbar,text="Delete All Data",command=delete_all).pack(side="left",padx=5)
 ttk.Label(root,textvariable=status).pack()
 ttk.Label(root,text="Developed by Razmi Mohamed • Verify OCR against original • Preview").pack(pady=8)
 search()
