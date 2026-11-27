@@ -41,5 +41,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "preview-${{ github.run_id }}-${{ github.run_attempt }}" AswesumaSmartOCR-Windows.zip --target "${{ github.sha }}" --title "V1.0.2 Preview" --notes "Extract ZIP and run AswesumaSmartOCR.exe. Local OCR preview; not production-ready. Verify OCR results against originals." --prerelease
+          $zip = Join-Path $env:GITHUB_WORKSPACE "AswesumaSmartOCR-V1.0.2-Windows.zip"
+          if (!(Test-Path -LiteralPath $zip -PathType Leaf)) { throw "Missing release ZIP: $zip" }
+          gh release create "preview-${{ github.run_id }}-${{ github.run_attempt }}" "$zip" --target "${{ github.sha }}" --title "V1.0.2 Preview" --notes "Extract ZIP and run AswesumaSmartOCR.exe. Local OCR preview; not production-ready. Verify OCR results against originals." --prerelease
           if ($LASTEXITCODE -ne 0) { throw 'Release failed' }
